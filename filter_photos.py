@@ -283,9 +283,12 @@ def process_photos(input_dir, restore_mode=False, workers=4):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Filter photos based on subjects (Person/Pet)."
+        description="Filter photos based on subjects (Person/Pet).",
+        formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("input_dir", help="Directory containing photos to scan")
+    parser.add_argument(
+        "input_dir", nargs="?", help="Directory containing photos to scan"
+    )
     parser.add_argument(
         "--restore",
         action="store_true",
@@ -299,6 +302,12 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if not args.input_dir:
+        parser.print_help()
+        print("\n[!] Error: Please specify the input directory.")
+        print("Example: uv run filter_photos.py /path/to/photos")
+        exit(1)
 
     if not os.path.isdir(args.input_dir):
         print(f"Error: Directory '{args.input_dir}' does not exist.")
