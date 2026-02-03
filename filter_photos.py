@@ -132,12 +132,12 @@ def is_screenshot(filepath, image_rgb):
     """
     Detect if an image is likely a screenshot.
     Checks:
-    1. EXIF data: Screenshots often lack EXIF or have specific software tags.
-    2. Dimensions: Match common screen resolutions (optional, but specific aspect ratios helps).
-    3. Content: Uniform color blocks or high text density (simple heuristic).
+    1. Filename: Contains 'screenshot' etc.
+    2. Dimensions: Exact match for known iPhone resolutions.
+    3. Aspect Ratio: Matches common phone screen ratios (16:9 to 21:9), distinguishing from 4:3/3:2 photos.
     """
     try:
-        # Check filename (simple heuristic)
+        # 1. Check filename
         filename = os.path.basename(filepath).lower()
         if "screenshot" in filename or "截图" in filename or "screen_shot" in filename:
             return True
@@ -145,7 +145,7 @@ def is_screenshot(filepath, image_rgb):
         pil_image = Image.open(filepath)
         width, height = pil_image.size
 
-        # Check dimensions against known iPhone resolutions
+        # 2. Check dimensions against known iPhone resolutions
         # Use exact match, checking both orientations
         if (width, height) in IPHONE_RESOLUTIONS or (
             height,
@@ -153,21 +153,20 @@ def is_screenshot(filepath, image_rgb):
         ) in IPHONE_RESOLUTIONS:
             return True
 
-        # Check EXIF - Real photos usually have Make/Model tags. Screenshots often don't.
-        # _getexif() returns None if no EXIF data
-        exif_data = pil_image._getexif()
-        if not exif_data:
-            # No EXIF is a strong indicator of screenshot or downloaded image
-            return True
+        # 3. Check Aspect Ratio for common mobile screens (Android/Generic)
+        # Photos are usually 4:3 (1.33) or 3:2 (1.5).
+        # Phone screens are usually 16:9 (1.77) or taller (18:9, 19.5:9, 20:9, 21:9).
 
-        # If EXIF exists, check specific tags
-        # 305: Software, 271: Make, 272: Model
-        # software = exif_data.get(305, "").lower() if exif_data else ""
+        long_side = max(width, height)
+        short_side = min(width, height)
+        if short_side == 0:
+            return False
 
-        make = exif_data.get(271)
-        model = exif_data.get(272)
+        ratio = long_side / short_side
 
-        if not make and not model:
+        # Range: 16:9 (1.77) to 21:9 (2.33)
+        # Allow small tolerance for rounding or status bars (e.g. 1.7 to 2.4)
+        if 1.7 <= ratio <= 2.4:
             return True
 
         return False
