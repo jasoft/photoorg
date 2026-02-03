@@ -26,6 +26,24 @@ LOG_FILE = "scan.log"
 CONFIDENCE_THRESHOLD = 0.5
 TARGET_CLASSES = [0, 15, 16]
 
+# Known iPhone Screen Resolutions (Width, Height) - covering iPhone 5 to 16 Pro Max
+# Includes rendered pixels for screenshots
+IPHONE_RESOLUTIONS = {
+    (1320, 2868),  # 16 Pro Max
+    (1206, 2622),  # 16 Pro
+    (1290, 2796),  # 16 Plus, 15 Pro Max, 15 Plus, 14 Pro Max
+    (1179, 2556),  # 16, 15 Pro, 15, 14 Pro
+    (1284, 2778),  # 14 Plus, 13 Pro Max, 12 Pro Max
+    (1170, 2532),  # 14, 13 Pro, 13, 12 Pro, 12
+    (1080, 2340),  # 13 mini, 12 mini
+    (1242, 2688),  # 11 Pro Max, XS Max
+    (1125, 2436),  # 11 Pro, XS, X
+    (828, 1792),  # 11, XR
+    (1242, 2208),  # 8 Plus, 7 Plus, 6s Plus, 6 Plus
+    (750, 1334),  # 8, 7, 6s, 6, SE2, SE3
+    (640, 1136),  # SE1, 5s, 5
+}
+
 # Thread-local storage for non-thread-safe objects (like OpenCV CascadeClassifier)
 thread_local_data = threading.local()
 
@@ -125,6 +143,15 @@ def is_screenshot(filepath, image_rgb):
             return True
 
         pil_image = Image.open(filepath)
+        width, height = pil_image.size
+
+        # Check dimensions against known iPhone resolutions
+        # Use exact match, checking both orientations
+        if (width, height) in IPHONE_RESOLUTIONS or (
+            height,
+            width,
+        ) in IPHONE_RESOLUTIONS:
+            return True
 
         # Check EXIF - Real photos usually have Make/Model tags. Screenshots often don't.
         # _getexif() returns None if no EXIF data
