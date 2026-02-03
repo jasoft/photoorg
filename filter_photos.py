@@ -19,6 +19,7 @@ except ImportError:
     print("Warning: pillow-heif not installed. HEIC support disabled.")
 
 DELETE_DIR_NAME = "to_delete"
+SCREENSHOTS_DIR_NAME = "screenshots"
 PROCESSED_DIR_NAME = "processed"
 METADATA_FILE = "restore_map.json"
 LOG_FILE = "scan.log"
@@ -48,8 +49,10 @@ def setup_logging(input_dir):
 
 def setup_directories(base_path):
     delete_dir = os.path.join(base_path, DELETE_DIR_NAME)
+    screenshots_dir = os.path.join(delete_dir, SCREENSHOTS_DIR_NAME)
     os.makedirs(delete_dir, exist_ok=True)
-    return delete_dir
+    os.makedirs(screenshots_dir, exist_ok=True)
+    return delete_dir, screenshots_dir
 
 
 def load_restore_map(base_path):
@@ -107,8 +110,52 @@ def has_face(image_rgb, person_bbox, face_cascade_path):
     return len(faces) > 0
 
 
+def is_screenshot(filepath, image_rgb):
+    """
+    Detect if an image is likely a screenshot.
+    Checks:
+    1. EXIF data: Screenshots often lack EXIF or have specific software tags.
+    2. Dimensions: Match common screen resolutions (optional, but specific aspect ratios helps).
+    3. Content: Uniform color blocks or high text density (simple heuristic).
+    """
+    try:
+        # Check filename (simple heuristic)
+        filename = os.path.basename(filepath).lower()
+        if "screenshot" in filename or "截图" in filename or "screen_shot" in filename:
+            return True
+
+        pil_image = Image.open(filepath)
+
+        # Check EXIF - Real photos usually have Make/Model tags. Screenshots often don't.
+        # _getexif() returns None if no EXIF data
+        exif_data = pil_image._getexif()
+        if not exif_data:
+            # No EXIF is a strong indicator of screenshot or downloaded image
+            return True
+
+        # If EXIF exists, check specific tags
+        # 305: Software, 271: Make, 272: Model
+        # software = exif_data.get(305, "").lower() if exif_data else ""
+
+        make = exif_data.get(271)
+        model = exif_data.get(272)
+
+        if not make and not model:
+            return True
+
+        return False
+    except Exception:
+        return False
+
+
 def process_single_file(
-    filepath, model, face_cascade_path, delete_dir, restore_map, map_lock
+    filepath,
+    model,
+    face_cascade_path,
+    delete_dir,
+    screenshots_dir,
+    restore_map,
+    map_lock,
 ):
     filename = os.path.basename(filepath)
     try:
@@ -118,7 +165,7 @@ def process_single_file(
             return False
 
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        # Ultralytics YOLO inference is generally thread-safe, but if issues arise, use a lock for model
+
         results = model(image_bgr, conf=CONFIDENCE_THRESHOLD, verbose=False)
 
         found_valid_subject = False
@@ -151,21 +198,30 @@ def process_single_file(
             logging.info(f"  [KEEP] {filename} - Reason: {keep_reason} (Left in place)")
             return True
         else:
-            reason = (
-                "No person/pet found"
-                if not is_person_without_face
-                else "Person detected but NO face visible"
-            )
+            # It's going to be filtered. Now check if it's a screenshot.
+            is_screen = is_screenshot(filepath, image_rgb)
+
+            if is_screen:
+                target_dir = screenshots_dir
+                reason = "Screenshot detected (and no valid subject)"
+            else:
+                target_dir = delete_dir
+                reason = (
+                    "No person/pet found"
+                    if not is_person_without_face
+                    else "Person detected but NO face visible"
+                )
+
             logging.info(f"  [FILTER] {filename} - Reason: {reason}")
 
             map_key = filename
-            dest_path = os.path.join(delete_dir, filename)
+            dest_path = os.path.join(target_dir, filename)
 
             base, ext = os.path.splitext(filename)
             counter = 1
             while os.path.exists(dest_path):
                 new_filename = f"{base}_{counter}{ext}"
-                dest_path = os.path.join(delete_dir, new_filename)
+                dest_path = os.path.join(target_dir, new_filename)
                 map_key = new_filename
                 counter += 1
 
@@ -183,7 +239,7 @@ def process_single_file(
 
 def process_photos(input_dir, restore_mode=False, workers=4):
     input_dir = os.path.abspath(input_dir)
-    delete_dir = setup_directories(input_dir)
+    delete_dir, screenshots_dir = setup_directories(input_dir)
 
     # Setup logging
     for handler in logging.root.handlers[:]:
@@ -195,24 +251,40 @@ def process_photos(input_dir, restore_mode=False, workers=4):
     if restore_mode:
         logging.info(f"--- STARTING RESTORE MODE in {delete_dir} ---")
         restored_count = 0
-        current_files = set(os.listdir(delete_dir))
 
-        for filename in list(current_files):
-            if filename == METADATA_FILE:
+        # Scan both to_delete and screenshots directories
+        dirs_to_scan = [delete_dir, screenshots_dir]
+
+        for scan_dir in dirs_to_scan:
+            if not os.path.exists(scan_dir):
                 continue
 
-            if filename in restore_map:
-                original_path = restore_map[filename]
-                current_path = os.path.join(delete_dir, filename)
+            current_files = set(os.listdir(scan_dir))
 
-                if os.path.exists(current_path):
-                    logging.info(f"Restoring: {filename} -> {original_path}")
-                    os.makedirs(os.path.dirname(original_path), exist_ok=True)
-                    shutil.move(current_path, original_path)
-                    restored_count += 1
+            for filename in list(current_files):
+                if filename == METADATA_FILE:
+                    continue
+
+                if filename in restore_map:
+                    original_path = restore_map[filename]
+                    current_path = os.path.join(scan_dir, filename)
+
+                    if os.path.exists(current_path):
+                        logging.info(f"Restoring: {filename} -> {original_path}")
+                        os.makedirs(os.path.dirname(original_path), exist_ok=True)
+                        shutil.move(current_path, original_path)
+                        restored_count += 1
 
         logging.info(f"Restored {restored_count} files.")
-        remaining_files = [f for f in os.listdir(delete_dir) if f != METADATA_FILE]
+
+        # Clean up map
+        remaining_files = []
+        for scan_dir in dirs_to_scan:
+            if os.path.exists(scan_dir):
+                remaining_files.extend(
+                    [f for f in os.listdir(scan_dir) if f != METADATA_FILE]
+                )
+
         new_map = {k: v for k, v in restore_map.items() if k in remaining_files}
         save_restore_map(input_dir, new_map)
         return
@@ -240,6 +312,8 @@ def process_photos(input_dir, restore_mode=False, workers=4):
                 dirs.remove(DELETE_DIR_NAME)
             if PROCESSED_DIR_NAME in dirs:
                 dirs.remove(PROCESSED_DIR_NAME)
+            if SCREENSHOTS_DIR_NAME in dirs:
+                dirs.remove(SCREENSHOTS_DIR_NAME)
 
             for filename in files:
                 if filename.lower().endswith(
@@ -254,6 +328,7 @@ def process_photos(input_dir, restore_mode=False, workers=4):
                         model,
                         face_cascade_path,
                         delete_dir,
+                        screenshots_dir,
                         restore_map,
                         map_lock,
                     )
