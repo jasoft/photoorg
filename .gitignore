@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Project specific
+photos/
+processed/
+to_delete/
+yolov8n.pt
+scan.log
+.DS_Store
